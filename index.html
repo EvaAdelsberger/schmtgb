@@ -53,7 +53,11 @@ h2{font-size:1.1rem}
 .card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .hint{font-size:.85rem;color:var(--muted);margin:0}
 .datebar{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:var(--r);padding:8px}
-.datebar .d{flex:1;text-align:center;min-width:0}
+.datebar .d{flex:1;text-align:center;min-width:0;position:relative;border-radius:10px;padding:4px 0;cursor:pointer}
+.datebar .d:focus-within{outline:3px solid var(--accent);outline-offset:2px}
+.datebar .d input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0;margin:0;font-size:16px}
+.datebar .cal{display:inline-flex;align-items:center;gap:5px}
+.datebar .cal svg{flex:none}
 .datebar .d strong{display:block;font-size:1.02rem}
 .datebar .d span{font-size:.8rem;color:var(--muted)}
 button{font:inherit;color:inherit}
@@ -143,7 +147,7 @@ input[type=file]{font:inherit;font-size:.9rem;max-width:100%}
     </div>
     <div class="datebar">
       <button class="icon-btn" id="prev" aria-label="Vorheriger Tag"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg></button>
-      <div class="d"><strong id="dateLabel"></strong><span id="dateSub"></span></div>
+      <div class="d"><strong class="cal"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span id="dateLabel"></span></strong><span id="dateSub"></span><input type="date" id="datePick" aria-label="Tag auswählen"></div>
       <button class="icon-btn" id="next" aria-label="Nächster Tag"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>
     </div>
 
@@ -305,7 +309,8 @@ const pending = new Set(); let timer = null;
 
 function saveLocal(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){} }
 function endDate(){ return addDays(state.settings.start, DAYS-1); }
-function clampDate(s){ const st=state.settings.start, en=addDays(st,DAYS-1), t=todayIso(); let max = t<en?t:en; if(max<st) max=st; if(s<st) return st; if(s>max) return max; return s; }
+function minDate(){ return addDays(todayIso(), -730); }
+function clampDate(s){ const t=todayIso(), mn=minDate(); if(s>t) return t; if(s<mn) return mn; return s; }
 function emptyDay(){ return { pain:{}, painFree:false, moves:[], minutes:null, moveText:"", note:"", updated:0 }; }
 function day(s){ return state.days[s] || emptyDay(); }
 function hasEntry(d){ return !!d && (d.painFree || Object.keys(d.pain||{}).length>0 || (d.moves||[]).length>0 || d.minutes>0 || (d.moveText||"").trim() || (d.note||"").trim()); }
@@ -314,7 +319,9 @@ function maxLv(d){ return Math.max(0, ...Object.values(d.pain||{})); }
 function mutate(fn){
   const d = JSON.parse(JSON.stringify(day(current)));
   fn(d); d.updated = Date.now();
-  state.days[current] = d; saveLocal(); queue(current);
+  state.days[current] = d;
+  if(current < state.settings.start && hasEntry(d)){ state.settings.start=current; state.settings.updated=Date.now(); queue("settings"); renderExport(); }
+  saveLocal(); queue(current);
 }
 function queue(id){ pending.add(id); setStatus(); clearTimeout(timer); timer=setTimeout(flush, 700); }
 function flush(){ pending.clear(); setStatus(); }
@@ -409,11 +416,15 @@ function cycle(id){
 function renderHeader(){
   const n = diff(state.settings.start, current)+1;
   const filled = Object.keys(state.days).filter(k=>k>=state.settings.start && k<=endDate() && hasEntry(state.days[k])).length;
-  document.getElementById("progress").textContent = `Tag ${n} von ${DAYS} · Woche ${Math.ceil(n/7)} · ${filled} Einträge`;
+  const pos = n<1 ? "Vor dem Beginn" : (n>DAYS ? "Nach den 8 Wochen" : `Tag ${n} von ${DAYS} · Woche ${Math.ceil(n/7)}`);
+  document.getElementById("progress").textContent = `${pos} · ${filled} ${filled===1?"Eintrag":"Einträge"}`;
   document.getElementById("dateLabel").textContent = fmtLong(current);
-  document.getElementById("dateSub").textContent = current===todayIso() ? "Heute" : (hasEntry(state.days[current]) ? "Eintrag vorhanden" : "Noch kein Eintrag");
-  document.getElementById("prev").disabled = current<=state.settings.start;
-  document.getElementById("next").disabled = current>=clampDate("9999-12-31");
+  let sub = current===todayIso() ? "Heute" : (hasEntry(state.days[current]) ? "Eintrag vorhanden" : "Noch kein Eintrag");
+  if(n<1 && !hasEntry(state.days[current])) sub += " · Ein Eintrag hier verschiebt den Beginn auf diesen Tag";
+  document.getElementById("dateSub").textContent = sub + (current===todayIso() ? "" : " · Tippen zum Ändern");
+  const dp=document.getElementById("datePick"); dp.max=todayIso(); dp.min=minDate(); if(document.activeElement!==dp) dp.value=current;
+  document.getElementById("prev").disabled = current<=minDate();
+  document.getElementById("next").disabled = current>=todayIso();
 }
 function renderPain(){
   const d=day(current);
@@ -479,6 +490,9 @@ function renderAll(){ renderDay(); renderOverview(); renderExport(); }
 /* ---------- Events ---------- */
 document.getElementById("prev").onclick=()=>{ current=clampDate(addDays(current,-1)); renderDay(); };
 document.getElementById("next").onclick=()=>{ current=clampDate(addDays(current,1)); renderDay(); };
+const datePick=document.getElementById("datePick");
+datePick.addEventListener("click",()=>{ try{ if(datePick.showPicker) datePick.showPicker(); }catch(e){} });
+datePick.addEventListener("change",()=>{ const v=datePick.value; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)) return; current=clampDate(v); datePick.blur(); renderDay(); });
 document.getElementById("todayBtn").onclick=()=>{ current=clampDate(todayIso()); renderDay(); };
 document.getElementById("painChips").addEventListener("click",e=>{ const b=e.target.closest(".pchip"); if(b) cycle(b.dataset.id); });
 document.getElementById("painFree").onclick=()=>{ mutate(d=>{ d.painFree=!d.painFree; if(d.painFree) d.pain={}; }); document.getElementById("lastinfo").textContent=""; renderPain(); };
